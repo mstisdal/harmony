@@ -3,7 +3,7 @@ import * as path from 'path';
 import Ajv from 'ajv';
 import _ from 'lodash';
 import logger from '../util/log';
-import { CmrUmmVariable } from '../util/cmr';
+import { CmrGranule, CmrUmmVariable } from '../util/cmr';
 import { Encrypter, Decrypter } from '../util/crypto';
 
 /**
@@ -198,6 +198,9 @@ export default class DataOperation {
   message: string;
 
   requestStartTime: Date; // The time that the initial request to harmony was received
+
+  // Hackfest - the granule to operate on
+  syncGranule?: CmrGranule;
 
   /**
    * Creates an instance of DataOperation.

@@ -1,6 +1,10 @@
 import _ from 'lodash';
 import { Logger } from 'winston';
 import * as axios from 'axios';
+import { promises as fs } from 'fs';
+import { CmrGranule } from 'util/cmr';
+import CmrStacCatalog from 'app/query-cmr/app/stac/cmr-catalog';
+import Catalog from 'app/query-cmr/app/stac/catalog';
 import BaseService, { functionalSerializeOperation } from './base-service';
 import InvocationResult from './invocation-result';
 import { batchOperations } from '../../util/batch';
@@ -32,6 +36,43 @@ interface ArgoVariable {
     };
   };
 }
+
+/**
+ * Hackfest - construct STAC catalog for a single granule
+ * @param collection - the CMR collection
+ * @param granule - the CMR granule
+ * @returns the stac catalog
+ */
+function constructSingleGranuleCatalog(collection: string, granule: CmrGranule): Catalog {
+  const catalog = new CmrStacCatalog({ description: `Catalog for ${collection} and ${granule.id}` });
+  catalog.links.push({
+    rel: 'harmony_source',
+    href: `${process.env.CMR_ENDPOINT}/search/concepts/${collection}`,
+  });
+  catalog.addCmrGranules([granule], '');
+  return catalog;
+}
+
+const cannedResponse = {
+  batch_completed: 'true',
+  batch_count: 1,
+  post_batch_step_count: 0,
+  items: [{
+    temporal: '2020-01-01T00:00:00.000Z,2020-01-01T01:59:59.000Z',
+    bbox: [
+      -180,
+      -90,
+      180,
+      90,
+    ],
+    href: 's3://local-staging-bucket/public/harmony/service-example/824c037e-9c54-4894-9e26-29310f7313cd/001_00_7f00ff_global_blue_var_regridded_subsetted.nc.png',
+    type: 'image/png',
+    title: '001_00_7f00ff_global_blue_var_regridded_subsetted.nc.png',
+    roles: [
+      'data',
+    ],
+  }],
+};
 
 /**
  * Service implementation which invokes an Argo workflow and creates a Job to poll for service
@@ -66,11 +107,10 @@ export default class ArgoService extends BaseService<ArgoServiceParams> {
 
   /**
    * Invokes an Argo workflow to execute a service request
-   *
-   *  @param logger - the logger associated with the request
-   *  @returns A promise resolving to null
+   * @param logger - the logger
+   * @returns A promise resolving to null
    */
-  async _run(logger: Logger): Promise<InvocationResult> {
+  async _runArgoWorkflow(logger: Logger): Promise<void> {
     const url = `${this.params.argo_url}/api/v1/workflows/${this.params.namespace}`;
 
     const goodVars = _.reject(Object.keys(this.params.env),
@@ -146,6 +186,65 @@ export default class ArgoService extends BaseService<ArgoServiceParams> {
     const frontendSubmitTime = endTime - this.operation.requestStartTime.getTime();
     logger.info('timing.workflow-submission.end', { durationMs: workflowSubmitTime });
     logger.info('timing.frontend-request.end', { durationMs: frontendSubmitTime });
+  }
+
+  /**
+   * Executes the request synchronously or invokes an Argo workflow to execute a service request
+   *
+   *  @param logger - the logger associated with the request
+   *  @returns A promise resolving to null
+   */
+  async _runSync(logger: Logger): Promise<void> {
+    logger.info('Running synchronously');
+    // Construct a STAC catalog for the granule
+    const catalog = constructSingleGranuleCatalog(
+      this.operation.sources[0].collection, this.operation.syncGranule,
+    );
+    // logger.info(`The catalog: ${JSON.stringify(catalog)}`);
+    const catalogDir = `${env.catalogDir}/${this.operation.requestId}`;
+    const inputsDir = `${catalogDir}/inputs`;
+    const outputsDir = `${catalogDir}/outputs`;
+    logger.info(`Writing inputs to: ${inputsDir}`);
+    logger.info(`Expecting outputs in: ${outputsDir}`);
+    // Create the catalog subdirectory
+    await fs.mkdir(catalogDir);
+    await fs.mkdir(inputsDir);
+    await fs.mkdir(outputsDir);
+
+    // Write the catalog
+    await catalog.write(`${inputsDir}/catalog.json`, true);
+
+    // Call the sync workflow handler (pass the operation and the location of the stac catalog
+    // - no env vars needed)
+    // Need to figure out which service to call here but can just hardcode for now to
+    // harmony-service-example
+    await axios.default.post('http://localhost:5000/work', this.operation);
+
+    // assume /outputs has service catalog
+
+    const harmonyBackend = `${this.operation.callback.replace('host.docker.internal', 'localhost')}`;
+    logger.info(`Calling harmony: ${harmonyBackend}/argo-response`);
+    // hack to just update the job to add a link
+    await axios.default.post(`${harmonyBackend}/argo-response`, cannedResponse);
+    // callback to say we're done with the job
+    logger.info(`Calling harmony: ${harmonyBackend}/response to mark job as complete`);
+    await axios.default.post(`${harmonyBackend}/response?status=successful&argo=true`);
+    return null;
+  }
+
+  /**
+   * Executes the request synchronously or invokes an Argo workflow to execute a service request
+   *
+   *  @param logger - the logger associated with the request
+   *  @returns A promise resolving to null
+   */
+  async _run(logger: Logger): Promise<InvocationResult> {
+    if (this.isSynchronous && this.operation.syncGranule) {
+      this._runSync(logger);
+    } else {
+      this._runArgoWorkflow(logger);
+    }
+
     return null;
   }
 

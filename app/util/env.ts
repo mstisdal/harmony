@@ -72,6 +72,7 @@ interface HarmonyEnv {
   builtInTaskPrefix: string;
   builtInTaskVersion: string;
   callbackUrlRoot: string;
+  catalogDir: string;
   cmrEndpoint: string;
   cmrGranuleLocatorImagePullPolicy: string;
   cmrMaxPageSize: number;

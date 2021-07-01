@@ -135,6 +135,11 @@ export default async function cmrGranuleLocator(
 
       const { hits, granules: jsonGranules } = cmrResponse;
 
+      // Hackfest - if only a single granule returned pass it in the operation
+      if (jsonGranules?.length === 1 && req.query.turbo === 'true') {
+        operation.syncGranule = jsonGranules[0];
+      }
+
       operation.cmrHits += hits;
       const msTaken = new Date().getTime() - startTime;
       logger.info('timing.cmr-granule-query.end', { durationMs: msTaken, hits });
