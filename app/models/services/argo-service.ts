@@ -93,7 +93,7 @@ async function generateCallbackBody(catalogFilename: string): Promise<object> {
   // Read the catalog
   const catalog = JSON.parse(fs.readFileSync(catalogFilename).toString());
   const catalogRoot = path.dirname(catalogFilename);
-  const relativeGranuleLink = catalog.links[1].href;
+  const relativeGranuleLink = catalog.links[2].href;
   const granuleLink = `${catalogRoot}/${relativeGranuleLink.replace(/^\./, '')}`;
   logger.info(`RelativeGranuleLink: ${relativeGranuleLink}, granuleLink: ${granuleLink}, catalogRoot: ${catalogRoot}`);
   const item = JSON.parse(fs.readFileSync(granuleLink).toString());
@@ -254,7 +254,10 @@ export default class ArgoService extends BaseService<ArgoServiceParams> {
     // Need to figure out which service to call here but can just hardcode for now to
     // harmony-service-example
     try {
-      await axios.default.post('http://localhost:5000/work', this.operation);
+      const serializedOp = functionalSerializeOperation(this.operation, this.config);
+
+      const serializedOperation = JSON.parse(serializedOp);
+      await axios.default.post('http://localhost:5000/work', serializedOperation);
     } catch (e) {
       logger.warn('Call to service failed');
     }
