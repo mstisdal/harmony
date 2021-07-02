@@ -245,7 +245,9 @@ export default class ArgoService extends BaseService<ArgoServiceParams> {
     await fs.promises.mkdir(outputsDir);
 
     // Write the catalog
-    await catalog.write(`${inputsDir}/catalog.json`, true);
+    const inputCatalog = `${inputsDir}/catalog0.json`;
+    const outputCatalog = `${outputsDir}/catalog.json`;
+    await catalog.write(inputCatalog, true);
 
     // Call the sync workflow handler (pass the operation and the location of the stac catalog
     // - no env vars needed)
@@ -261,8 +263,7 @@ export default class ArgoService extends BaseService<ArgoServiceParams> {
 
     const harmonyBackend = `${this.operation.callback.replace('host.docker.internal', 'localhost')}`;
     logger.info(`Calling harmony: ${harmonyBackend}/argo-response`);
-    const inputCatalog = `${inputsDir}/catalog.json`;
-    const outputCatalog = `${outputsDir}/catalog0.json`;
+
     // Temp test with the input catalog until the service is generating the outputCatalog
     const granuleCatalog = fs.existsSync(outputCatalog) ? outputCatalog : inputCatalog;
 
