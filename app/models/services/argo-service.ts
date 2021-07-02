@@ -1,10 +1,13 @@
+/* eslint-disable no-shadow */
 import _ from 'lodash';
 import { Logger } from 'winston';
 import * as axios from 'axios';
-import { promises as fs } from 'fs';
+import * as fs from 'fs';
 import { CmrGranule } from 'util/cmr';
 import CmrStacCatalog from 'app/query-cmr/app/stac/cmr-catalog';
 import Catalog from 'app/query-cmr/app/stac/catalog';
+import path = require('path');
+import logger from 'util/log';
 import BaseService, { functionalSerializeOperation } from './base-service';
 import InvocationResult from './invocation-result';
 import { batchOperations } from '../../util/batch';
@@ -53,7 +56,7 @@ function constructSingleGranuleCatalog(collection: string, granule: CmrGranule):
   return catalog;
 }
 
-const cannedResponse = {
+const _cannedResponse = {
   batch_completed: 'true',
   batch_count: 1,
   post_batch_step_count: 0,
@@ -73,6 +76,36 @@ const cannedResponse = {
     ],
   }],
 };
+
+/**
+ * Reads the STAC catalog and converts to a response body to send to the harmony backend to add
+ * links to a job.
+ * @param catalogFilename - the name of the catalog file
+ * @returns the response to send
+ */
+async function generateCallbackBody(catalogFilename: string): Promise<object> {
+  const body = {
+    batch_completed: 'true',
+    batch_count: 1,
+    post_batch_step_count: 0,
+    items: [],
+  };
+  // Read the catalog
+  const catalog = JSON.parse(fs.readFileSync(catalogFilename).toString());
+  const catalogRoot = path.dirname(catalogFilename);
+  const relativeGranuleLink = catalog.links[1].href;
+  const granuleLink = `${catalogRoot}/${relativeGranuleLink.replace(/^\./, '')}`;
+  logger.info(`RelativeGranuleLink: ${relativeGranuleLink}, granuleLink: ${granuleLink}, catalogRoot: ${catalogRoot}`);
+  const item = JSON.parse(fs.readFileSync(granuleLink).toString());
+  const temporal = `${item.properties.start_datetime},${item.properties.end_datetime}`;
+  const { bbox } = item;
+  const { href, type, title, roles } = item.assets.data;
+  const granule = { temporal, bbox, href, type, title, roles };
+
+  body.items.push(granule);
+
+  return body;
+}
 
 /**
  * Service implementation which invokes an Argo workflow and creates a Job to poll for service
@@ -207,9 +240,9 @@ export default class ArgoService extends BaseService<ArgoServiceParams> {
     logger.info(`Writing inputs to: ${inputsDir}`);
     logger.info(`Expecting outputs in: ${outputsDir}`);
     // Create the catalog subdirectory
-    await fs.mkdir(catalogDir);
-    await fs.mkdir(inputsDir);
-    await fs.mkdir(outputsDir);
+    await fs.promises.mkdir(catalogDir);
+    await fs.promises.mkdir(inputsDir);
+    await fs.promises.mkdir(outputsDir);
 
     // Write the catalog
     await catalog.write(`${inputsDir}/catalog.json`, true);
@@ -218,14 +251,25 @@ export default class ArgoService extends BaseService<ArgoServiceParams> {
     // - no env vars needed)
     // Need to figure out which service to call here but can just hardcode for now to
     // harmony-service-example
-    await axios.default.post('http://localhost:5000/work', this.operation);
+    try {
+      await axios.default.post('http://localhost:5000/work', this.operation);
+    } catch (e) {
+      logger.warn('Call to service failed');
+    }
 
     // assume /outputs has service catalog
 
     const harmonyBackend = `${this.operation.callback.replace('host.docker.internal', 'localhost')}`;
     logger.info(`Calling harmony: ${harmonyBackend}/argo-response`);
-    // hack to just update the job to add a link
-    await axios.default.post(`${harmonyBackend}/argo-response`, cannedResponse);
+    const inputCatalog = `${inputsDir}/catalog.json`;
+    const outputCatalog = `${outputsDir}/catalog0.json`;
+    // Temp test with the input catalog until the service is generating the outputCatalog
+    const granuleCatalog = fs.existsSync(outputCatalog) ? outputCatalog : inputCatalog;
+
+    const backendCallbackBody = await generateCallbackBody(granuleCatalog);
+    logger.info(`Backend body: ${JSON.stringify(backendCallbackBody)}`);
+    // await axios.default.post(`${harmonyBackend}/argo-response`, cannedResponse);
+    await axios.default.post(`${harmonyBackend}/argo-response`, backendCallbackBody);
     // callback to say we're done with the job
     logger.info(`Calling harmony: ${harmonyBackend}/response to mark job as complete`);
     await axios.default.post(`${harmonyBackend}/response?status=successful&argo=true`);
