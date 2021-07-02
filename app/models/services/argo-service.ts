@@ -255,9 +255,14 @@ export default class ArgoService extends BaseService<ArgoServiceParams> {
     // harmony-service-example
     try {
       const serializedOp = functionalSerializeOperation(this.operation, this.config);
-
       const serializedOperation = JSON.parse(serializedOp);
-      await axios.default.post('http://localhost:5000/work', serializedOperation);
+      let port = 5000;
+      if (this.params.template === 'asf-gdal-subsetter') {
+        port = 5001;
+      }
+
+      // await axios.default.post('http://localhost:5000/work', serializedOperation);
+      await axios.default.post(`http://localhost:${port}/work`, serializedOperation);
     } catch (e) {
       logger.warn('Call to service failed');
     }
