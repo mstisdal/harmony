@@ -13,8 +13,8 @@
     "publish": "docker push harmonyservices/service-runner:${VERSION:-latest}"
   },
   "engines": {
-    "node": "^12.14.1",
-    "npm": ">=7"
+    "node": "^16.13.1",
+    "npm": "^8.1.2"
   },
   "author": "NASA EOSDIS Harmony team",
   "license": "Apache-2.0",
