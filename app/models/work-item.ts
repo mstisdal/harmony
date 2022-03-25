@@ -126,74 +126,29 @@ export async function getNextWorkItem(
 ): Promise<WorkItem> {
   let workItemData;
   try {
-    const subQueryForUsersRequestingService =
-      tx(Job.table)
-        .select('username')
-        .join(`${WorkItem.table} as w`, `${Job.table}.jobID`, 'w.jobID')
-        .whereIn(`${Job.table}.status`, activeJobStatuses)
-        .where({ 'w.status': 'ready', serviceID });
-    // lock rows in the jobs table for users requesting this service - needed as a workaround
-    // for postgres limitation (https://stackoverflow.com/questions/5272412/group-by-in-update-from-clause)
-    let jobQuery = tx(Job.table)
+    workItemData = await tx({ w: WorkItem.table })
       .forUpdate()
-      .join(WorkItem.table, `${Job.table}.jobID`, '=', `${WorkItem.table}.jobID`)
-      .select(['username', 'serviceID', `${WorkItem.table}.serviceID`])
-      .whereIn('username', subQueryForUsersRequestingService);
-
-    if (db.client.config.client === 'pg') {
-      jobQuery = jobQuery.skipLocked();
-    }
-
-    await jobQuery;
-
-    const userData = await tx(Job.table)
-      .join(WorkItem.table, `${Job.table}.jobID`, '=', `${WorkItem.table}.jobID`)
-      .select(['username'])
-      .max(`${Job.table}.updatedAt`, { as: 'm' })
-      .whereIn('username', subQueryForUsersRequestingService)
-      .groupBy('username')
-      .orderBy('m', 'asc')
+      .select(...tableFields, `${WorkflowStep.table}.operation`)
+      .join(WorkflowStep.table, function () {
+        this
+          .on(`${WorkflowStep.table}.stepIndex`, 'w.workflowStepIndex')
+          .on(`${WorkflowStep.table}.jobID`, 'w.jobID');
+      })
+      .join(Job.table, 'w.jobID', '=', `${Job.table}.jobID`)
+      // eslint-disable-next-line @typescript-eslint/naming-convention
+      .where({ 'w.serviceID': serviceID, 'w.status': WorkItemStatus.READY })
+      .whereIn('jobs.status', [JobStatus.RUNNING, JobStatus.ACCEPTED])
+      .orderBy(['w.id'])
       .first();
 
-    if (userData?.username) {
-      let workItemDataQuery = tx(`${WorkItem.table} as w`)
-        .forUpdate()
-        .join(`${Job.table} as j`, 'w.jobID', 'j.jobID')
-        .join(`${WorkflowStep.table} as wf`, function () {
-          this.on('w.jobID', '=', 'wf.jobID')
-            .on('w.workflowStepIndex', '=', 'wf.stepIndex');
-        })
-        .select(...tableFields, 'wf.operation')
-        .whereIn('j.status', activeJobStatuses)
-        .where('w.status', '=', 'ready')
-        .where('w.serviceID', '=', serviceID)
-        .where('j.username', '=', userData.username)
-        .orderBy('j.isAsync', 'asc')
-        .orderBy('j.updatedAt', 'asc')
-        .first();
-
-      if (db.client.config.client === 'pg') {
-        workItemDataQuery = workItemDataQuery.skipLocked();
-      }
-
-      workItemData = await workItemDataQuery;
-
-      if (workItemData) {
-        workItemData.operation = JSON.parse(workItemData.operation);
-        await tx(WorkItem.table)
-          .update({ status: WorkItemStatus.RUNNING, updatedAt: new Date() })
-          .where({ id: workItemData.id });
-        // need to update the job otherwise long running jobs won't count against
-        // the user's priority
-        await tx(Job.table)
-          .update({ updatedAt: new Date() })
-          .where({ jobID: workItemData.jobID });
-      }
-
+    if (workItemData) {
+      workItemData.operation = JSON.parse(workItemData.operation);
+      await tx(WorkItem.table)
+        .update({ status: WorkItemStatus.RUNNING, updatedAt: new Date() })
+        .where({ id: workItemData.id });
     }
   } catch (e) {
-    logger.error(`Error getting next work item for service [${serviceID}]`);
-    logger.error(e);
+    logger.error('Error getting next work item');
     throw e;
   }
 
